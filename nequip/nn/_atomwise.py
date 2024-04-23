@@ -127,6 +127,7 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
         type_names: List[str],
         shifts: Optional[List[float]],
         scales: Optional[List[float]],
+        shifts_mask: Optional[List[float]],
         arguments_in_dataset_units: bool,
         out_field: Optional[str] = None,
         scales_trainable: bool = False,
@@ -144,6 +145,7 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
             irreps_out={self.out_field: irreps_in[self.field]},
         )
 
+        
         self.has_shifts = shifts is not None
         if shifts is not None:
             shifts = torch.as_tensor(shifts, dtype=torch.get_default_dtype())
@@ -151,10 +153,19 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
                 shifts = torch.ones(num_types) * shifts
             assert shifts.shape == (num_types,), f"Invalid shape of shifts {shifts}"
             self.shifts_trainable = shifts_trainable
+            
+            if shifts_mask is not None:
+                shifts_mask = torch.as_tensor(shifts_mask, dtype=torch.get_default_dtype())
+                if len(shifts_mask.reshape([-1])) == 1:
+                    shifts_mask = torch.ones(num_types) * shifts_mask
+                assert shifts_mask.shape == (num_types,), f"Invalid shape of shifts_mask {shifts_mask}"
+                
             if shifts_trainable:
                 self.shifts = torch.nn.Parameter(shifts)
+                self.shifts_mask = torch.nn.Parameter(shifts_mask,requires_grad=False)
             else:
-                self.register_buffer("shifts", shifts)
+                self.register_buffer("shifts", shifts*shifts_mask)
+                
 
         self.has_scales = scales is not None
         if scales is not None:
@@ -183,7 +194,7 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
         if self.has_scales:
             in_field = self.scales[species_idx].view(-1, 1) * in_field
         if self.has_shifts:
-            in_field = self.shifts[species_idx].view(-1, 1) + in_field
+            in_field = (self.shifts_mask[species_idx].view(-1,1) * self.shifts[species_idx].view(-1, 1)) + in_field
         data[self.out_field] = in_field
         return data
 
@@ -196,13 +207,15 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
                 f"PerSpeciesScaleShift's arguments were in dataset units; rescaling:\n  "
                 f"Original scales: {TypeMapper.format(self.scales, self.type_names) if self.has_scales else 'n/a'} "
                 f"shifts: {TypeMapper.format(self.shifts, self.type_names) if self.has_shifts else 'n/a'}"
+                f"shifts_mask: {TypeMapper.format(self.shifts_mask, self.type_names) if self.has_shifts else 'n/a'}"
             )
             with torch.no_grad():
                 if self.has_scales:
                     self.scales.div_(rescale_module.scale_by)
                 if self.has_shifts:
-                    self.shifts.div_(rescale_module.scale_by)
+                    (self.shifts_mask*self.shifts).div_(rescale_module.scale_by)
             logging.debug(
                 f"  New scales: {TypeMapper.format(self.scales, self.type_names) if self.has_scales else 'n/a'} "
                 f"shifts: {TypeMapper.format(self.shifts, self.type_names) if self.has_shifts else 'n/a'}"
+                f"shifts_mask: {TypeMapper.format(self.shifts_mask, self.type_names) if self.has_shifts else 'n/a'}"
             )

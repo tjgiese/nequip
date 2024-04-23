@@ -156,7 +156,11 @@ def PerSpeciesRescale(
         module_prefix + "_shifts",
         f"dataset_per_atom_{AtomicDataDict.TOTAL_ENERGY_KEY}_mean",
     )
-
+    shifts_mask = config.get(
+        module_prefix + "_shifts_mask",
+        True,
+    )
+    
     # Check for common double shift mistake with defaults
     if "RescaleEnergyEtc" in config.get("model_builders", []):
         # if the defaults are enabled, then we will get bad double shift
@@ -225,6 +229,19 @@ def PerSpeciesRescale(
         elif isinstance(shifts, (list, float)):
             shifts = torch.as_tensor(shifts)
 
+        my_shifts_mask = shifts.detach() * 0 + 1
+        if isinstance(shifts_mask,bool):
+            my_shifts_mask *= float(shifts_mask)
+        elif isinstance(shifts_mask,list):
+            my_shifts_mask = torch.as_tensor( [float(x) for x in shifts_mask] )
+        shifts_mask = my_shifts_mask
+        
+
+        if shifts_mask.shape != shifts.shape:
+            raise Exception(f"Shape of per_species_rescale_shifts_mask {per_species_rescale_shifts_mask.shape}"
+                            +f" is incompatible with shifts {shifts.shape}")
+
+            
         if scales is not None and torch.min(scales) < RESCALE_THRESHOLD:
             raise ValueError(
                 f"Per species energy scaling was very low: {scales}. Maybe try setting {module_prefix}_scales = 1."
@@ -241,6 +258,7 @@ def PerSpeciesRescale(
         # so this is fine regardless of whether its trainable.
         scales = 1.0 if scales is not None else None
         shifts = 0.0 if shifts is not None else None
+        shifts_mask = 1.0 if shifts_mask is not None else None
         # values correctly scaled according to where the come from
         # will be brought from the state dict later,
         # so what you set this to doesnt matter:
@@ -252,6 +270,7 @@ def PerSpeciesRescale(
         out_field=AtomicDataDict.PER_ATOM_ENERGY_KEY,
         shifts=shifts,
         scales=scales,
+        shifts_mask=shifts_mask,
     )
 
     params["arguments_in_dataset_units"] = arguments_in_dataset_units
