@@ -158,7 +158,7 @@ def PerSpeciesRescale(
     )
     shifts_mask = config.get(
         module_prefix + "_shifts_mask",
-        True,
+        None,
     )
     
     # Check for common double shift mistake with defaults
@@ -229,18 +229,12 @@ def PerSpeciesRescale(
         elif isinstance(shifts, (list, float)):
             shifts = torch.as_tensor(shifts)
 
-        my_shifts_mask = shifts.detach() * 0 + 1
-        if isinstance(shifts_mask,bool):
-            my_shifts_mask *= float(shifts_mask)
-        elif isinstance(shifts_mask,list):
-            my_shifts_mask = torch.as_tensor( [float(x) for x in shifts_mask] )
-        shifts_mask = my_shifts_mask
         
-
-        if shifts_mask.shape != shifts.shape:
-            raise Exception(f"Shape of per_species_rescale_shifts_mask {per_species_rescale_shifts_mask.shape}"
-                            +f" is incompatible with shifts {shifts.shape}")
-
+        if isinstance(shifts_mask,list):
+            shifts_mask = torch.as_tensor( [float(x) for x in shifts_mask] )
+        else:
+            shifts_mask = None
+        
             
         if scales is not None and torch.min(scales) < RESCALE_THRESHOLD:
             raise ValueError(

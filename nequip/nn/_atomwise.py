@@ -103,6 +103,8 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
         num_types: the number of types in the model.
         shifts: the initial shifts to use, one per atom type.
         scales: the initial scales to use, one per atom type.
+        shifts_mask: a non-optimizable mask applied to shifts to allow some types to not contribute
+            to the energy; usually used from qm/mm delta-mlp models.
         arguments_in_dataset_units: if ``True``, says that the provided shifts/scales are in dataset
             units (in which case they will be rescaled appropriately by any global rescaling later
             applied to the model); if ``False``, the provided shifts/scales will be used without modification.
@@ -119,6 +121,7 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
     shifts_trainable: bool
     has_scales: bool
     has_shifts: bool
+    has_shifts_mask: bool
 
     def __init__(
         self,
@@ -147,6 +150,7 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
 
         
         self.has_shifts = shifts is not None
+        self.has_shifts_mask = shifts_mask is not None
         if shifts is not None:
             shifts = torch.as_tensor(shifts, dtype=torch.get_default_dtype())
             if len(shifts.reshape([-1])) == 1:
@@ -156,16 +160,17 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
             
             if shifts_mask is not None:
                 shifts_mask = torch.as_tensor(shifts_mask, dtype=torch.get_default_dtype())
-                if len(shifts_mask.reshape([-1])) == 1:
-                    shifts_mask = torch.ones(num_types) * shifts_mask
                 assert shifts_mask.shape == (num_types,), f"Invalid shape of shifts_mask {shifts_mask}"
                 
             if shifts_trainable:
                 self.shifts = torch.nn.Parameter(shifts)
-                self.shifts_mask = torch.nn.Parameter(shifts_mask,requires_grad=False)
-            else:
+                if shifts_mask is not None:
+                    self.shifts_mask = torch.nn.Parameter(shifts_mask,requires_grad=False)
+            elif self.has_shifts_mask:
                 self.register_buffer("shifts", shifts*shifts_mask)
-                
+            else:
+                self.register_buffer("shifts", shifts)
+
 
         self.has_scales = scales is not None
         if scales is not None:
@@ -194,7 +199,11 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
         if self.has_scales:
             in_field = self.scales[species_idx].view(-1, 1) * in_field
         if self.has_shifts:
-            in_field = (self.shifts_mask[species_idx].view(-1,1) * self.shifts[species_idx].view(-1, 1)) + in_field
+            if self.has_shifts_mask:
+                in_field = (self.shifts_mask[species_idx].view(-1,1) * \
+                            self.shifts[species_idx].view(-1, 1)) + in_field
+            else:
+                in_field = (self.shifts[species_idx].view(-1, 1)) + in_field
         data[self.out_field] = in_field
         return data
 
@@ -207,15 +216,18 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
                 f"PerSpeciesScaleShift's arguments were in dataset units; rescaling:\n  "
                 f"Original scales: {TypeMapper.format(self.scales, self.type_names) if self.has_scales else 'n/a'} "
                 f"shifts: {TypeMapper.format(self.shifts, self.type_names) if self.has_shifts else 'n/a'}"
-                f"shifts_mask: {TypeMapper.format(self.shifts_mask, self.type_names) if self.has_shifts else 'n/a'}"
+                f"shifts_mask: {TypeMapper.format(self.shifts_mask, self.type_names) if self.has_shifts_mask else 'n/a'}"
             )
             with torch.no_grad():
                 if self.has_scales:
                     self.scales.div_(rescale_module.scale_by)
                 if self.has_shifts:
-                    (self.shifts_mask*self.shifts).div_(rescale_module.scale_by)
-            logging.debug(
+                    if self.has_shifts_mask:
+                        (self.shifts_mask*self.shifts).div_(rescale_module.scale_by)
+                    else:
+                        self.shifts.div_(rescale_module.scale_by)
+                logging.debug(
                 f"  New scales: {TypeMapper.format(self.scales, self.type_names) if self.has_scales else 'n/a'} "
                 f"shifts: {TypeMapper.format(self.shifts, self.type_names) if self.has_shifts else 'n/a'}"
-                f"shifts_mask: {TypeMapper.format(self.shifts_mask, self.type_names) if self.has_shifts else 'n/a'}"
+                f"shifts_mask: {TypeMapper.format(self.shifts_mask, self.type_names) if self.has_shifts_mask else 'n/a'}"
             )
