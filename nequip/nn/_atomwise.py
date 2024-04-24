@@ -138,6 +138,7 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
         irreps_in={},
     ):
         super().__init__()
+
         self.num_types = num_types
         self.type_names = type_names
         self.field = field
@@ -159,7 +160,14 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
             self.shifts_trainable = shifts_trainable
             
             if shifts_mask is not None:
-                shifts_mask = torch.as_tensor(shifts_mask, dtype=torch.get_default_dtype())
+                if isinstance(shifts_mask,list):
+                    my_shifts_mask = torch.as_tensor( [float(x) for x in shifts_mask] )
+                    if len(my_shifts_mask.reshape([-1])) == 1:
+                        shifts_mask = torch.ones(num_types)
+                    else:
+                        shifts_mask = my_shifts_mask
+                else:
+                    shifts_mask = torch.ones(num_types) * shifts_mask
                 assert shifts_mask.shape == (num_types,), f"Invalid shape of shifts_mask {shifts_mask}"
                 
             if shifts_trainable:
@@ -170,6 +178,8 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
                 self.register_buffer("shifts", shifts*shifts_mask)
             else:
                 self.register_buffer("shifts", shifts)
+            if not self.has_shifts_mask:
+                self.register_buffer("shifts_mask", torch.Tensor())
 
 
         self.has_scales = scales is not None
@@ -190,7 +200,6 @@ class PerSpeciesScaleShift(GraphModuleMixin, torch.nn.Module):
 
         if not (self.has_scales or self.has_shifts):
             return data
-
         species_idx = data[AtomicDataDict.ATOM_TYPE_KEY]
         in_field = data[self.field]
         assert len(in_field) == len(

@@ -229,13 +229,6 @@ def PerSpeciesRescale(
         elif isinstance(shifts, (list, float)):
             shifts = torch.as_tensor(shifts)
 
-        
-        if isinstance(shifts_mask,list):
-            shifts_mask = torch.as_tensor( [float(x) for x in shifts_mask] )
-        else:
-            shifts_mask = None
-        
-            
         if scales is not None and torch.min(scales) < RESCALE_THRESHOLD:
             raise ValueError(
                 f"Per species energy scaling was very low: {scales}. Maybe try setting {module_prefix}_scales = 1."
